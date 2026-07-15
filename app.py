@@ -140,15 +140,27 @@ def application_form():
 
 def approver_panel(role):
     st.header(f"Panel Kelulusan - {role}")
+
+    # Use session state to remember which application the approver is viewing so UI persists across reruns
+    if 'selected_app' not in st.session_state:
+        st.session_state['selected_app'] = None
+
     pending = get_pending_for_role(role)
     if not pending:
         st.info("Tiada permohonan untuk diluluskan.")
         return
+
     for row in pending:
         app = dict(zip([ 'id','nama','jawatan','email','telefon','bahagian','unit','gred','pembiayaan','nama_latihan','tarikh_latihan','tempoh','tempat','status','created_at'], row))
         st.subheader(f"Permohonan ID: {app['id']} - {app['nama']}")
         st.write(app)
+
+        # Button to open the signer view for this application. This sets session state so the canvas & inputs persist.
         if st.button(f"Lihat & Tandatangan - {app['id']}", key=f"view_{app['id']}"):
+            st.session_state['selected_app'] = app['id']
+
+        # If this application is selected, show the signature canvas and approve controls
+        if st.session_state.get('selected_app') == app['id']:
             st.write("Klik tandatangan untuk setuju:")
             signer_name = st.text_input("Nama Pelulus", key=f"name_{app['id']}")
             canvas_result = st_canvas(
@@ -160,8 +172,12 @@ def approver_panel(role):
                 drawing_mode="freedraw",
                 key=f"canvas_{app['id']}"
             )
+
             if st.button("Sahkan Kelulusan", key=f"approve_{app['id']}"):
-                if canvas_result.image_data is None:
+                # Make sure the signer provided a name and signed
+                if not signer_name:
+                    st.error("Sila masukkan nama pelulus.")
+                elif canvas_result is None or canvas_result.image_data is None:
                     st.error("Sila tandatangan sebelum sahkan.")
                 else:
                     img = Image.fromarray(canvas_result.image_data.astype('uint8'), 'RGBA')
@@ -176,6 +192,9 @@ def approver_panel(role):
                     conn.commit()
                     conn.close()
                     st.success("Permohonan diluluskan.")
+                    # clear selection so approver can work on next application
+                    st.session_state['selected_app'] = None
+
 
 def hr_panel():
     st.header("Panel HR - Finalize & Cetak")
