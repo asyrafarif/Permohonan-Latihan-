@@ -10,9 +10,8 @@ import pandas as pd
 
 DB = "apps.db"
 
-# Demo passwords - gantikan dengan auth sebenar untuk production
+# Panel passwords - Pemohon tidak perlu password
 PANEL_PASSWORDS = {
-    'Pemohon': 'pemohon123',
     'BKT': 'bkt123',
     'BSM': 'bsm123',
     'BKP': 'bkp123',
@@ -91,6 +90,7 @@ def save_signature(application_id, role, signer_name, img_bytes):
     conn.close()
 
 def get_pending_for_role(role):
+    """Get applications pending approval by specific role"""
     conn = sqlite3.connect(DB)
     c = conn.cursor()
     # Map role to pembiayaan pending status
@@ -133,12 +133,15 @@ def display_timeline(application_id):
         st.info("Belum ada status yang direkod.")
         return
     
-    # Status display with custom colors
-    status_colors = {
+    # Status display with custom colors and descriptions
+    status_descriptions = {
         'submitted_by_applicant': '🟦 Dihantar oleh Pemohon',
         'pending_BKT': '🟨 Menunggu Kelulusan BKT',
         'pending_BSM': '🟨 Menunggu Kelulusan BSM',
         'pending_BKP': '🟨 Menunggu Kelulusan BKP',
+        'approved_bkt': '🟩 Diluluskan oleh BKT',
+        'approved_bsm': '🟩 Diluluskan oleh BSM',
+        'approved_bkp': '🟩 Diluluskan oleh BKP',
         'approved_finance': '🟩 Diluluskan oleh Kewangan',
         'finalized_by_hr': '🟪 Difinaliskan oleh HR'
     }
@@ -146,14 +149,17 @@ def display_timeline(application_id):
     for status, updated_at, updated_by in timeline:
         col1, col2, col3 = st.columns([1, 2, 2])
         with col1:
-            st.write(status_colors.get(status, f"ℹ️ {status}"))
+            st.write(status_descriptions.get(status, f"ℹ️ {status}"))
         with col2:
             st.write(f"**{updated_by}**")
         with col3:
             st.write(f"_{datetime.fromisoformat(updated_at).strftime('%d/%m/%Y %H:%M')}_")
 
 def login_panel(panel_name):
-    """Handle password authentication for each panel"""
+    """Handle password authentication for each panel (not needed for Pemohon)"""
+    if panel_name == 'Pemohon':
+        return True
+    
     if f'{panel_name}_authenticated' not in st.session_state:
         st.session_state[f'{panel_name}_authenticated'] = False
     
@@ -171,9 +177,7 @@ def login_panel(panel_name):
     return True
 
 def application_form():
-    if not login_panel('Pemohon'):
-        return
-    
+    """Applicant panel - no password needed"""
     st.header("📝 Borang Permohonan Latihan")
     with st.form("permohonan"):
         nama = st.text_input("Nama")
@@ -224,10 +228,15 @@ def application_form():
             img.save(buf, format='PNG')
             img_bytes = buf.getvalue()
             save_signature(app_id, 'Pemohon', nama, img_bytes)
-            # set application to pending for the right finance role
+            # set application to pending for the right finance role based on pembiayaan
             conn = sqlite3.connect(DB)
             c = conn.cursor()
-            target_status = 'pending_BKT' if pembiayaan=='Akaun Amanah' else ('pending_BSM' if pembiayaan=='Akaun HCD' else 'pending_BKP')
+            if pembiayaan == 'Akaun Amanah':
+                target_status = 'pending_BKT'
+            elif pembiayaan == 'Akaun HCD':
+                target_status = 'pending_BSM'
+            else:  # Akaun Mengurus
+                target_status = 'pending_BKP'
             c.execute("UPDATE applications SET status=? WHERE id=?", (target_status, app_id))
             conn.commit()
             conn.close()
@@ -293,6 +302,7 @@ def generate_and_download_pdf(app, app_id):
     st.markdown(f"[⬇️ Muat Turun PDF]({href})", unsafe_allow_html=True)
 
 def approver_panel(role):
+    """Approver panel for BKT, BSM, BKP"""
     if not login_panel(role):
         return
     
@@ -304,10 +314,10 @@ def approver_panel(role):
     
     pending = get_pending_for_role(role)
     if not pending:
-        st.info("Tiada permohonan untuk diluluskan.")
+        st.info(f"Tiada permohonan untuk diluluskan oleh {role}.")
         return
     
-    st.subheader(f"Permohonan Menunggu Kelulusan ({len(pending)} item)")
+    st.subheader(f"Permohonan Menunggu Kelulusan {role} ({len(pending)} item)")
     
     for row in pending:
         app = dict(zip(['id','nama','jawatan','email','telefon','bahagian','unit','gred','pembiayaan','nama_latihan','tarikh_latihan','tempoh','tempat','status','created_at'], row))
@@ -362,19 +372,33 @@ def approver_panel(role):
                         img.save(buf, format='PNG')
                         img_bytes = buf.getvalue()
                         save_signature(app['id'], role, signer_name, img_bytes)
-                        # update status
+                        
+                        # Update status based on which role approved it
                         conn = sqlite3.connect(DB)
                         c = conn.cursor()
-                        c.execute("UPDATE applications SET status=? WHERE id=?", ('approved_finance', app['id']))
+                        
+                        # Map role to approved status
+                        if role == 'BKT':
+                            new_status = 'approved_bkt'
+                        elif role == 'BSM':
+                            new_status = 'approved_bsm'
+                        elif role == 'BKP':
+                            new_status = 'approved_bkp'
+                        else:
+                            new_status = 'approved_finance'
+                        
+                        c.execute("UPDATE applications SET status=? WHERE id=?", (new_status, app['id']))
                         conn.commit()
                         conn.close()
-                        log_status_change(app['id'], 'approved_finance', signer_name)
-                        st.success("✅ Permohonan diluluskan!")
+                        log_status_change(app['id'], new_status, signer_name)
+                        
+                        st.success(f"✅ Permohonan diluluskan oleh {role}!")
                         # clear selection
                         st.session_state[f'selected_app_{role}'] = None
                         st.rerun()
 
 def hr_panel():
+    """HR panel for finalizing and generating PDFs"""
     if not login_panel('HR'):
         return
     
@@ -384,8 +408,9 @@ def hr_panel():
     st.write(f"Jumlah permohonan: **{len(df)}**")
     
     # Filter by status
-    status_filter = st.selectbox("Filter mengikut status", 
-                                  ['Semua', 'submitted_by_applicant', 'pending_BKT', 'pending_BSM', 'pending_BKP', 'approved_finance', 'finalized_by_hr'])
+    status_options = ['Semua', 'submitted_by_applicant', 'pending_BKT', 'pending_BSM', 'pending_BKP', 
+                      'approved_bkt', 'approved_bsm', 'approved_bkp', 'approved_finance', 'finalized_by_hr']
+    status_filter = st.selectbox("Filter mengikut status", status_options)
     
     if status_filter != 'Semua':
         df = df[df['status'] == status_filter]
